@@ -1,0 +1,125 @@
+apiVersion: apps/v1beta1
+kind: StatefulSet
+metadata:
+  name: consul
+  labels:
+    app: consul
+    stack: kv
+spec:
+  serviceName: consul
+  replicas: $CLUSTER_SIZE
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: consul
+        stack: kv
+    spec:
+      restartPolicy: Always
+      securityContext:
+        fsGroup: 1000 # Allow non-root user to access PersistentVolume
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: consul-node
+                operator: In
+                values:
+                - "true"
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 1
+            podAffinityTerm:
+              topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - "consul"
+      containers:
+      - name: consul
+        image: consul:latest
+        env:
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        command:
+          - "/bin/sh"
+          - "-ec"
+          - |
+            for i in $(seq 0 $(($CLUSTER_SIZE - 1))); do
+                while true; do
+                    echo "Waiting for consul-${i}.consul to come up"
+                    ping -W 1 -c 1 consul-${i}.consul.$NAMESPACE.svc > /dev/null && break
+                    sleep 1s
+                done
+            done
+
+            PEERS=""
+            for i in $(seq 0 $(($CLUSTER_SIZE - 1))); do
+              NEXT_PEER="$(ping -c 1 consul-${i}.consul.$NAMESPACE.svc | awk -F'[()]' '/PING/{print $2}')"
+              if [ "${NEXT_PEER}" != "${POD_IP}" ]; then
+                PEERS="${PEERS}${PEERS:+ } -retry-join consul-${i}.consul.$NAMESPACE.svc"
+              fi
+            done
+
+            exec /bin/consul agent \
+              -ui -server \
+              -datacenter=dc1 \
+              -rejoin ${PEERS} \
+              -bootstrap-expect=$CLUSTER_SIZE \
+              -encrypt=$(echo -n '$GOSSIP_KEY' | base64) \
+              -disable-host-node-id -disable-keyring-file \
+              -config-dir=/consul/config -data-dir=/consul/data \
+              -advertise=${POD_IP} -bind=0.0.0.0 -client=0.0.0.0
+        imagePullPolicy: IfNotPresent
+        livenessProbe:
+          exec:
+            command:
+            - consul
+            - members
+          initialDelaySeconds: 300
+          timeoutSeconds: 5
+        ports:
+        - name: server
+          containerPort: 8300
+        - name: rpc
+          containerPort: 8400
+        - name: http
+          containerPort: 8500
+        - name: serflan-tcp
+          protocol: TCP
+          containerPort: 8301
+        - name: serflan-udp
+          protocol: UDP
+          containerPort: 8301
+        - name: serfwan-tcp
+          protocol: TCP
+          containerPort: 8302
+        - name: serfwan-udp
+          protocol: UDP
+          containerPort: 8302
+        - name: consuldns-tcp
+          protocol: TCP
+          containerPort: 8600
+        - name: consuldns-udp
+          protocol: UDP
+          containerPort: 8600
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        volumeMounts:
+        - name: data
+          mountPath: /consul/data
+      volumes:
+      - name: data
+        hostPath:
+          path: /data/consul/data
