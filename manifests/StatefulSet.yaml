@@ -8,8 +8,6 @@ metadata:
 spec:
   serviceName: consul
   replicas: $CLUSTER_SIZE
-  strategy:
-    type: Recreate
   template:
     metadata:
       labels:
@@ -53,27 +51,33 @@ spec:
           - |
             for i in $(seq 0 $(($CLUSTER_SIZE - 1))); do
                 while true; do
-                    echo "Waiting for consul-${i}.consul to come up"
-                    ping -W 1 -c 1 consul-${i}.consul.$NAMESPACE.svc > /dev/null && break
+                    echo "Waiting for consul-${i} to come up"
+                    ping -W 1 -c 1 consul-${i}.consul.$NAMESPACE.svc.cluster.local > /dev/null && break
                     sleep 1s
                 done
             done
 
             PEERS=""
             for i in $(seq 0 $(($CLUSTER_SIZE - 1))); do
-              NEXT_PEER="$(ping -c 1 consul-${i}.consul.$NAMESPACE.svc | awk -F'[()]' '/PING/{print $2}')"
+              NEXT_PEER="$(ping -c 1 consul-${i}.consul.$NAMESPACE.svc.cluster.local | awk -F'[()]' '/PING/{print $2}')"
               if [ "${NEXT_PEER}" != "${POD_IP}" ]; then
-                PEERS="${PEERS}${PEERS:+ } -retry-join consul-${i}.consul.$NAMESPACE.svc"
+                PEERS="${PEERS}${PEERS:+ } -retry-join consul-${i}.consul.$NAMESPACE.svc.cluster.local"
               fi
             done
+
+            echo -n '{"disable_update_check":true}' > /consul/config/local.json
+
+            if [ $CLUSTER_SIZE -gt 1 ]; then
+              boots="-bootstrap-expect=$CLUSTER_SIZE"
+            else
+              boots="-bootstrap"
+            fi
 
             exec /bin/consul agent \
               -ui -server \
               -datacenter=dc1 \
-              -rejoin ${PEERS} \
-              -bootstrap-expect=$CLUSTER_SIZE \
-              -encrypt=$(echo -n '$GOSSIP_KEY' | base64) \
-              -disable-host-node-id -disable-keyring-file \
+              -rejoin ${PEERS} ${boots} \
+              -encrypt="$(echo -n $GOSSIP_KEY | base64)" \
               -config-dir=/consul/config -data-dir=/consul/data \
               -advertise=${POD_IP} -bind=0.0.0.0 -client=0.0.0.0
         imagePullPolicy: IfNotPresent
