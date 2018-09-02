@@ -6,6 +6,7 @@ metadata:
     app: consul
     stack: kv
   annotations:
+    traefik.ingress.kubernetes.io/frame-deny: "true"
     traefik.ingress.kubernetes.io/auth-type: basic
     traefik.ingress.kubernetes.io/auth-secret: consul-basic-secret
 spec:

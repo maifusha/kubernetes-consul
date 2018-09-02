@@ -49,6 +49,10 @@ spec:
           - "/bin/sh"
           - "-ec"
           - |
+            sed -i "s/dl-cdn.alpinelinux.org/mirrors.ustc.edu.cn/g" /etc/apk/repositories && apk update
+            apk add --no-cache tzdata
+            ln -sf /usr/share/zoneinfo/$TZ /etc/localtime
+
             for i in $(seq 0 $(($CLUSTER_SIZE - 1))); do
                 while true; do
                     echo "Waiting for consul-${i} to come up"
@@ -75,6 +79,7 @@ spec:
 
             exec /bin/consul agent \
               -ui -server \
+              -log-level=err \
               -datacenter=dc1 \
               -rejoin ${PEERS} ${boots} \
               -encrypt="$(echo -n $GOSSIP_KEY | base64)" \
